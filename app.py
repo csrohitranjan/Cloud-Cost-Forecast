@@ -155,84 +155,99 @@ with col2:
     st.plotly_chart(fig_region, use_container_width=True)
 
 
-# ------------------- Forecast: Before vs After Optimization -------------------
-st.subheader(" FORECAST COMPARISON ")
-
-# ---- Prepare Data ----
+# ---- Aggregate baseline (before optimization) ----
 baseline_cost = filtered_data.groupby('date')['cost'].sum().reset_index()
 baseline_cost.rename(columns={'date': 'ds', 'cost': 'y'}, inplace=True)
 
-# Exclude stopped instances for 'after optimization' forecast
+# ---- Aggregate optimized (exclude stopped instances) ----
 optimized_data = filtered_data[filtered_data['status'] != 'stopped']
 optimized_cost = optimized_data.groupby('date')['cost'].sum().reset_index()
 optimized_cost.rename(columns={'date': 'ds', 'cost': 'y'}, inplace=True)
 
-# ---- Train Prophet Models ----
-model_before = Prophet(daily_seasonality=True, seasonality_prior_scale=10)
-model_before.fit(baseline_cost)
+# ---- Train a single Prophet model for baseline ----
+model = Prophet(daily_seasonality=True, seasonality_prior_scale=10)
+model.fit(baseline_cost)
 
-model_after = Prophet(daily_seasonality=True, seasonality_prior_scale=10)
-model_after.fit(optimized_cost)
+# ---- Forecast next 30 days ----
+future = model.make_future_dataframe(periods=30)
+forecast = model.predict(future)
 
-# ---- Make Predictions ----
-future = model_before.make_future_dataframe(periods=30)
-forecast_before = model_before.predict(future)
-forecast_after = model_after.predict(future)
+# ---- Calculate optimization ratio ----
+if baseline_cost['y'].sum() > 0:
+    ratio = optimized_cost['y'].sum() / baseline_cost['y'].sum()
+else:
+    ratio = 1.0
 
-# ---- Calculate Projected Savings ----
-predicted_savings = forecast_before['yhat'].sum() - forecast_after['yhat'].sum()
+# ---- Compute optimized forecast based on ratio ----
+forecast['yhat_optimized'] = forecast['yhat'] * ratio
 
-st.metric(" Projected Monthly Savings", f"${predicted_savings:,.2f}")
+# ---- Calculate projected savings ----
+predicted_savings = forecast['yhat'].sum() - forecast['yhat_optimized'].sum()
+
+# ---- Display metric ----
+st.metric("💡 Projected Monthly Savings", f"${predicted_savings:,.2f}")
 
 # ---- Plot Forecast Comparison ----
 fig_forecast = go.Figure()
 
-# Actual cost
+# 1️⃣ Actual Cost (Historical Data)
 fig_forecast.add_trace(go.Bar(
     x=baseline_cost['ds'],
     y=baseline_cost['y'],
     name='Actual Cost',
-    marker_color='gray',
-    opacity=0.6
+    marker_color='rgba(128,128,128,0.5)',
+    opacity=0.7
 ))
 
-# Forecast before optimization
+# 2️⃣ Forecast Before Optimization
 fig_forecast.add_trace(go.Scatter(
-    x=forecast_before['ds'],
-    y=forecast_before['yhat'],
+    x=forecast['ds'],
+    y=forecast['yhat'],
     mode='lines',
     name='Forecast (Before Optimization)',
     line=dict(color='red', width=3)
 ))
 
-# Forecast after optimization
+# 3️⃣ Forecast After Optimization (Scaled)
 fig_forecast.add_trace(go.Scatter(
-    x=forecast_after['ds'],
-    y=forecast_after['yhat'],
+    x=forecast['ds'],
+    y=forecast['yhat_optimized'],
     mode='lines',
     name='Forecast (After Optimization)',
-    line=dict(color='green', width=3)
+    line=dict(color='green', width=3, )
 ))
 
-# Highlight difference area
+# 4️⃣ Highlight Savings Area (Between Red & Green Lines)
 fig_forecast.add_trace(go.Scatter(
-    x=forecast_before['ds'],
-    y=forecast_before['yhat'],
-    fill='tonexty',
-    mode='none',
-    fillcolor='rgba(255,0,0,0.1)',
-    name='Potential Cost Savings'
+    x=pd.concat([forecast['ds'], forecast['ds'][::-1]]),
+    y=pd.concat([forecast['yhat'], forecast['yhat_optimized'][::-1]]),
+    fill='toself',
+    fillcolor='rgba(0, 255, 0, 0.1)',
+    line=dict(color='rgba(255,255,255,0)'),
+    hoverinfo="skip",
+    showlegend=True,
+    name='Projected Savings Area'
 ))
 
+# ---- Chart Styling ----
 fig_forecast.update_layout(
-    title=" Cost Forecast: Before vs After Optimization",
+    title="📊 Cost Forecast: Before vs After Optimization",
     xaxis_title="Date",
     yaxis_title="Predicted Cost ($)",
     template="plotly_white",
     hovermode="x unified",
-    legend=dict(orientation="h", y=-0.2, x=0)
+    legend=dict(
+        orientation="h",
+        y=-0.25,
+        x=0.05,
+        bgcolor='rgba(0,0,0,0.7)',
+        bordercolor='LightGray',
+        borderwidth=1
+    ),
+    margin=dict(l=40, r=40, t=60, b=40)
 )
 
+# ---- Display Chart ----
 st.plotly_chart(fig_forecast, use_container_width=True)
 
 
@@ -313,4 +328,3 @@ with tab2:
     cleaned_buckets = list(collection.find({"status":"cleaned"}).sort("date", -1).limit(5))
     for bucket in cleaned_buckets:
         st.success(f"✅ ID: {bucket['_id']} | {bucket['bucket_name']} ({bucket['region']})")
-
